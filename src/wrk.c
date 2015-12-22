@@ -234,6 +234,7 @@ void *thread_main(void *arg) {
         c->request = request;
         c->length  = length;
         c->delayed = cfg.delay;
+        c->start = 0;
         connect_socket(thread, c);
     }
 
@@ -369,11 +370,12 @@ static int response_complete(http_parser *parser) {
         if (!stats_record(statistics.latency, now - c->start)) {
             thread->errors.timeout++;
         }
+        c->start = 0;
         c->delayed = cfg.delay;
         aeCreateFileEvent(thread->loop, c->fd, AE_WRITABLE, socket_writeable, c);
     }
 
-    if ((cfg.no_keep_alive) || (!http_should_keep_alive(parser))) {
+    if ((cfg.no_keep_alive)) {
         reconnect_socket(thread, c);
         goto done;
     }
@@ -386,6 +388,10 @@ static int response_complete(http_parser *parser) {
 
 static void socket_connected(aeEventLoop *loop, int fd, void *data, int mask) {
     connection *c = data;
+
+    if (c->start == 0) {
+        c->start = time_us();
+    }
 
     switch (sock.connect(c)) {
         case OK:    break;
@@ -421,8 +427,10 @@ static void socket_writeable(aeEventLoop *loop, int fd, void *data, int mask) {
         if (cfg.dynamic) {
             script_request(thread->L, &c->request, &c->length);
         }
-        c->start   = time_us();
         c->pending = cfg.pipeline;
+    }
+    if (c->start == 0) {
+        c->start = time_us();
     }
 
     char  *buf = c->request + c->written;
